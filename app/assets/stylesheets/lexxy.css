@@ -59,6 +59,10 @@
   lexxy-toolbar {
     border-color: var(--lexxy-border-color);
     gap: 0;
+
+    svg {
+      fill: currentColor;
+    }
   }
 
   .lexxy-editor__toolbar-button {
@@ -73,6 +77,13 @@
       &:hover:not([aria-pressed="true"]) {
         background-color: oklch(var(--lch-ink-dark) / 20%);
       }
+    }
+  }
+
+  .lexxy-editor__toolbar-dropdown--chevron {
+    summary:after {
+      block-size: 0.3rem;
+      inline-size: 0.3rem;
     }
   }
 
@@ -118,6 +129,10 @@
     border-inline-start: 1px solid currentColor;
     line-height: inherit;
     margin-block: 1em;
+  }
+
+  .lexxy-prompt-menu {
+    max-inline-size: min(35ch, calc(100% - var(--lexxy-prompt-offset-x)));
   }
 
   /* Content
@@ -187,5 +202,30 @@
 
   .attachment {
     margin-inline: 0;
+  }
+
+  .attachment-gallery {
+    .attachment {
+      display: inline-block;
+      inline-size: calc(33.333% - 0.8ch);
+    }
+
+    &.attachment-gallery--2,
+    &.attachment-gallery--4 {
+      .attachment {
+        inline-size: calc(50% - 0.8ch);
+      }
+    }
+  }
+
+  action-text-attachment[content-type^='application/vnd.actiontext'] {
+    lexxy-node-delete-button {
+      inset-inline-start: -0.25ch;
+
+      .lexxy-floating-controls__group {
+        background-color: oklch(var(--lch-blue-dark));
+        border-radius: 50%;
+      }
+    }
   }
 }

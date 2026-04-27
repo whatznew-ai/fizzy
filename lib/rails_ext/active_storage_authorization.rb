@@ -31,6 +31,10 @@ Rails.application.config.to_prepare do
     end
 
     private
+      def bearer_token_authenticatable_request?
+        true
+      end
+
       def publicly_accessible_blob?
         @blob.publicly_accessible?
       end
@@ -39,6 +43,10 @@ Rails.application.config.to_prepare do
         unless @blob.accessible_to?(Current.user)
           head :forbidden
         end
+      end
+
+      def http_cache_forever(public: false, &block)
+        super(public: public && publicly_accessible_blob?, &block)
       end
   end
 

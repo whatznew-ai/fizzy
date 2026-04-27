@@ -41,12 +41,22 @@ class BoardsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  test "edit renders 11-day auto-close option last on the knob" do
+    get edit_board_path(boards(:writebook))
+    assert_response :success
+
+    assert_select "input[type=radio][name='board[auto_postpone_period_in_days]']" do |options|
+      assert_equal Entropy::AUTO_POSTPONE_PERIODS_IN_DAYS.map(&:to_s), options.map { |option| option["value"] }
+      assert_equal "11", options.last["value"]
+    end
+  end
+
   test "update" do
     patch board_path(boards(:writebook)), params: {
       board: {
         name: "Writebook bugs",
         all_access: false,
-        auto_postpone_period: 1.day
+        auto_postpone_period_in_days: 7
       },
       user_ids: users(:kevin, :jz).pluck(:id)
     }
@@ -54,7 +64,7 @@ class BoardsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to edit_board_path(boards(:writebook))
     assert_equal "Writebook bugs", boards(:writebook).reload.name
     assert_equal users(:kevin, :jz).sort, boards(:writebook).users.sort
-    assert_equal 1.day, entropies(:writebook_board).auto_postpone_period
+    assert_equal 7.days, entropies(:writebook_board).auto_postpone_period
     assert_not boards(:writebook).all_access?
   end
 
@@ -207,6 +217,19 @@ class BoardsControllerTest < ActionDispatch::IntegrationTest
     assert_equal users(:kevin).boards.count, @response.parsed_body.count
   end
 
+  test "index as JSON includes public_description fields for published boards" do
+    board = boards(:writebook)
+    board.publish
+    board.update!(public_description: "<p>Public board description.</p>")
+
+    get boards_path, as: :json
+    assert_response :success
+
+    published_board = @response.parsed_body.find { |b| b["id"] == board.id }
+    assert_equal board.public_description.to_plain_text, published_board["public_description"]
+    assert_equal board.public_description.to_s, published_board["public_description_html"]
+  end
+
   test "index as JSON paginates and preserves recently-accessed order" do
     account = accounts("37s")
     kevin = users(:kevin)
@@ -248,6 +271,44 @@ class BoardsControllerTest < ActionDispatch::IntegrationTest
     get board_path(boards(:writebook)), as: :json
     assert_response :success
     assert_equal boards(:writebook).name, @response.parsed_body["name"]
+    assert_equal boards(:writebook).auto_postpone_period_in_days, @response.parsed_body["auto_postpone_period_in_days"]
+  end
+
+  test "show as JSON includes public_description fields when published" do
+    board = boards(:writebook)
+    board.publish
+    board.update!(public_description: "<p>This is a <strong>public</strong> note.</p>")
+
+    get board_path(board), as: :json
+    assert_response :success
+    assert_equal board.public_description.to_plain_text, @response.parsed_body["public_description"]
+    assert_equal board.public_description.to_s, @response.parsed_body["public_description_html"]
+  end
+
+  test "show as JSON excludes public_description fields when not published" do
+    board = boards(:writebook)
+    board.update!(public_description: "<p>This is a <strong>public</strong> note.</p>")
+    assert_not board.published?
+
+    get board_path(board), as: :json
+    assert_response :success
+    assert_nil @response.parsed_body["public_description"]
+    assert_nil @response.parsed_body["public_description_html"]
+  end
+
+  test "show as JSON includes granted user_ids when board is not all access" do
+    board = boards(:private)
+    board.accesses.revise granted: users(:david, :jz), revoked: []
+
+    get board_path(board), as: :json
+    assert_response :success
+    assert_equal board.users.ids.sort, @response.parsed_body["user_ids"].sort
+  end
+
+  test "show as JSON excludes user_ids when board is all access" do
+    get board_path(boards(:writebook)), as: :json
+    assert_response :success
+    assert_nil @response.parsed_body["user_ids"]
   end
 
   test "show as JSON includes public_url when published" do
@@ -275,6 +336,7 @@ class BoardsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :created
     assert_equal board_path(Board.last, format: :json), @response.headers["Location"]
+    assert_equal "My new board", @response.parsed_body["name"]
   end
 
   test "update as JSON" do
