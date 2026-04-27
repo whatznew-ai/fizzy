@@ -141,6 +141,10 @@ else
   if [ "$DATABASE_ADAPTER" = "mysql" ]; then
     oss_mysql_setup
   fi
+
+  if [ "$DATABASE_ADAPTER" != "mysql" ]; then
+    step "Fetching cr-sqlite extension" "$app_root/bin/fetch-crsqlite"
+  fi
 fi
 
 if [[ $* == *--reset* ]]; then

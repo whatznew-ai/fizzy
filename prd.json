@@ -1,0 +1,332 @@
+{
+  "title": "Rails + SQLite bidirectional sync via CRDTs (production-oriented blueprint)",
+  "version": "1.0",
+  "date": "2026-03-07T09:00:00+01:00",
+  "goals": [
+    "Bidirectional, multi-writer sync between two Rails servers using SQLite locally",
+    "Sub-second de-sync under normal network conditions",
+    "Data consistency with deterministic merges (CRDTs), minimal error risk",
+    "Operational reliability with idempotency, backpressure, and observability"
+  ],
+  "principles": [
+    "Never file-sync SQLite. Replicate logical CRDT operations.",
+    "Operation-based CRDTs for efficiency; commutative/idempotent application.",
+    "Deterministic conflict resolution per field/type.",
+    "Security by mTLS or HMAC. Exactly-once semantics via idempotency keys.",
+    "Continuous streaming transport with retries and watermarking."
+  ],
+  "architecture": {
+    "nodes": ["server_a (node_id: ulid)", "server_b (node_id: ulid)"],
+    "datastore": "SQLite on each node",
+    "data_modeling_choice": "Field-level CRDTs for relational data; document CRDTs for complex nested content",
+    "crdts_recommended": {
+      "scalar_fields": "LWW-Register with Lamport timestamp + node-id tiebreaker",
+      "sets/tags/associations": "OR-Set (Observed-Removed Set) with unique add IDs",
+      "counters": "PN-Counter (pair of G-Counters, per-node components)",
+      "records/deletes": "LWW tombstone per record (delete is a CRDT op)",
+      "text/collaborative_docs": "Automerge (document CRDT) via sidecar for rich text or nested JSON"
+    },
+    "replication": {
+      "mode": "Operation-based (preferred), batch streaming",
+      "transport": "HTTP/1.1 or HTTP/2 with keep-alive; optional WebSocket for push",
+      "security": "mTLS (recommended) or HMAC with per-peer rotating secrets",
+      "ordering": "Not required; CRDT ops are commutative",
+      "idempotency": "op_id (UUID/ULID) with applied_ops table",
+      "watermarking": "Per-peer last_sent_op_pk (or lamport) to enable resume",
+      "latency_target": "< 1s end-to-end under normal network conditions",
+      "compression": "gzip (recommended) for batches"
+    },
+    "failover": {
+      "topology": "True multi-writer; no leader required",
+      "retries": "Exponential backoff with jitter; dead-letter after N failures",
+      "reconciliation": "State converges automatically; ops can be replayed safely"
+    }
+  },
+  "schema": {
+    "infra_tables": [
+      {
+        "name": "crdt_ops",
+        "purpose": "Durable oplog for all CRDT operations",
+        "columns": [
+          "id INTEGER PRIMARY KEY",
+          "op_id TEXT UNIQUE NOT NULL",
+          "node_id TEXT NOT NULL",
+          "entity_type TEXT NOT NULL",
+          "entity_id TEXT NOT NULL",
+          "op_kind TEXT NOT NULL",
+          "payload_json TEXT NOT NULL",
+          "lamport INTEGER NOT NULL",
+          "occurred_at DATETIME NOT NULL"
+        ],
+        "indexes": [
+          "INDEX crdt_ops_entity ON (entity_type, entity_id)",
+          "INDEX crdt_ops_lamport ON (lamport)",
+          "UNIQUE(op_id)"
+        ]
+      },
+      {
+        "name": "applied_ops",
+        "purpose": "Idempotency set",
+        "columns": ["op_id TEXT PRIMARY KEY"]
+      },
+      {
+        "name": "peers",
+        "purpose": "Peer configuration and progress tracking",
+        "columns": [
+          "id INTEGER PRIMARY KEY",
+          "peer_id TEXT UNIQUE NOT NULL",
+          "base_url TEXT NOT NULL",
+          "auth_kind TEXT NOT NULL",
+          "hmac_key TEXT",
+          "mtls_spki_hash TEXT",
+          "last_sent_op_rowid INTEGER DEFAULT 0",
+          "last_received_at DATETIME"
+        ]
+      },
+      {
+        "name": "node_clock",
+        "purpose": "Persisted Lamport clock",
+        "columns": [
+          "id INTEGER PRIMARY KEY CHECK (id = 1)",
+          "lamport INTEGER NOT NULL"
+        ],
+        "seed": "INSERT OR IGNORE INTO node_clock (id, lamport) VALUES (1, 0)"
+      }
+    ],
+    "domain_example_users": [
+      {
+        "name": "users",
+        "purpose": "Example entity with CRDT fields",
+        "columns": [
+          "id INTEGER PRIMARY KEY",
+          "uuid TEXT UNIQUE NOT NULL",
+          "name TEXT",
+          "name_ts INTEGER NOT NULL DEFAULT 0",
+          "name_node TEXT",
+          "tombstone INTEGER NOT NULL DEFAULT 0",
+          "tombstone_ts INTEGER NOT NULL DEFAULT 0",
+          "tombstone_node TEXT"
+        ],
+        "indexes": ["UNIQUE(uuid)"]
+      },
+      {
+        "name": "user_tags",
+        "purpose": "OR-Set materialization for tags",
+        "columns": [
+          "id INTEGER PRIMARY KEY",
+          "user_uuid TEXT NOT NULL",
+          "tag TEXT NOT NULL",
+          "tag_uid TEXT NOT NULL",
+          "removed INTEGER NOT NULL DEFAULT 0"
+        ],
+        "indexes": ["UNIQUE(user_uuid, tag_uid)", "INDEX(user_uuid, tag)"]
+      },
+      {
+        "name": "pn_counters",
+        "purpose": "PN-Counter components per node",
+        "columns": [
+          "id INTEGER PRIMARY KEY",
+          "entity_type TEXT NOT NULL",
+          "entity_id TEXT NOT NULL",
+          "node_id TEXT NOT NULL",
+          "p INTEGER NOT NULL DEFAULT 0",
+          "n INTEGER NOT NULL DEFAULT 0"
+        ],
+        "indexes": ["UNIQUE(entity_type, entity_id, node_id)"]
+      }
+    ]
+  },
+  "crdt_semantics": {
+    "lamport_clock": {
+      "tick_local_op": "lamport = lamport + 1",
+      "merge_remote": "lamport = max(local_lamport, remote_lamport) + 1",
+      "persist": "Update node_clock.lamport atomically on every op"
+    },
+    "lww_register": {
+      "compare": "Higher lamport wins; tie-break by lexicographic node_id",
+      "apply": "If incoming (ts,node) > current, set value and metadata"
+    },
+    "or_set": {
+      "add": "Insert (tag_uid, tag, removed=false) if absent",
+      "remove": "Set removed=true for referenced tag_uid(s)",
+      "query": "Current set = adds where removed=false"
+    },
+    "pn_counter": {
+      "increment": "p[node_id] += delta",
+      "decrement": "n[node_id] += delta",
+      "value": "sum(p_i) - sum(n_i)"
+    },
+    "delete_record": {
+      "tombstone": "LWW-delete: set tombstone=1 with (ts,node) as LWW register",
+      "query": "Filter tombstone=0 for active records"
+    }
+  },
+  "api_contracts": {
+    "push_endpoint": {
+      "path": "POST /replication/crdt_ops",
+      "auth": "mTLS (recommended) or HMAC header: X-Signature: hex(HMAC_SHA256(body, key))",
+      "request_body_json": {
+        "ops": [
+          {
+            "op_id": "ulid/uuid",
+            "node_id": "ulid",
+            "entity_type": "User|Order|...",
+            "entity_id": "uuid",
+            "op_kind": "lww_set|orset_add|orset_remove|pn_inc|pn_dec|delete",
+            "payload": { "arbitrary": "per op" },
+            "lamport": 123456,
+            "occurred_at": "RFC3339"
+          }
+        ]
+      },
+      "response": {
+        "200": { "applied": "integer count", "errors": [] },
+        "4xx/5xx": "Retry with backoff; idempotent"
+      },
+      "notes": [
+        "Batch up to ~64KB compressed for low latency.",
+        "Apply ops transactionally; skip if applied_ops contains op_id."
+      ]
+    },
+    "pull_endpoint_optional": {
+      "path": "GET /replication/crdt_ops?since_rowid=INT&limit=1000",
+      "auth": "Same as push",
+      "response": { "ops": "array as above", "next_since_rowid": "INT" }
+    }
+  },
+  "rails_implementation": {
+    "config": {
+      "env": [
+        "NODE_ID=<ULID>",
+        "REPLICATION_MODE=push",
+        "PEERS=[{peer_id, base_url, auth_kind, hmac_key|mtls_ref}]"
+      ]
+    },
+    "write_path": [
+      "Controller calls a Service",
+      "Service constructs CRDT op(s):",
+      "- For LWW set: {op_kind: lww_set, payload: {field, value, ts: lamport, node}}",
+      "- For OR-Set add: {op_kind: orset_add, payload: {set, element, tag_uid, ts, node}}",
+      "- For OR-Set remove: orset_remove referencing tag_uid",
+      "- For delete: {op_kind: delete, payload: {ts, node}}",
+      "Service: persist op to crdt_ops, apply to materialized tables, insert into applied_ops, enqueue PushToPeersJob"
+    ],
+    "apply_logic_pseudocode": [
+      "BEGIN TRANSACTION",
+      "if applied_ops.exists(op_id) -> skip",
+      "insert into crdt_ops (...)",
+      "case op_kind:",
+      "- lww_set: compare (lamport,node) vs current_{field}_ts,node; update if newer",
+      "- orset_add: upsert (entity_id, tag_uid, tag, removed=false)",
+      "- orset_remove: set removed=true where (entity_id, tag_uid)",
+      "- pn_inc: upsert pn_counters with p += delta for node_id",
+      "- pn_dec: upsert pn_counters with n += delta for node_id",
+      "- delete: set tombstone=1 using LWW compare on tombstone_ts,node",
+      "insert applied_ops(op_id)",
+      "COMMIT"
+    ],
+    "background_jobs": [
+      {
+        "name": "PushToPeersJob",
+        "trigger": "After local commit or periodic batch (e.g., every 100ms)",
+        "logic": "For each peer, select crdt_ops.rowid > peers.last_sent_op_rowid ORDER BY rowid LIMIT N; POST; on 200, advance watermark"
+      },
+      {
+        "name": "RetryDeadLettersJob",
+        "logic": "Retry failed batches with exponential backoff, max_age configurable"
+      },
+      {
+        "name": "CompactionJob",
+        "logic": [
+          "Periodically snapshot materialized state per entity",
+          "Prune crdt_ops up to the minimum acknowledged watermark across peers",
+          "For OR-Set, hard-delete pairs (add, remove) whose remove is acknowledged by all peers"
+        ]
+      }
+    ],
+    "observability": [
+      "Metrics: ops_emitted, ops_applied, replication_lag_seconds (now - last_received_at), conflicts_resolved_count",
+      "Logs: one line per batch with peer_id, count, latency, success/failure",
+      "Health: /healthz includes last_sent_op_rowid per peer and node_clock"
+    ]
+  },
+  "recommended_defaults": {
+    "node_id": "ULID (sortable, unique)",
+    "timestamps": "Lamport counter persisted per node",
+    "tie_breaker": "Lexicographic node_id on equal lamport",
+    "batching": "Up to 200 ops or 64KB compressed, whichever first, every 100–200ms",
+    "http": "HTTP/2 with keep-alive; 2 concurrent in-flight batches per peer",
+    "security": "mTLS preferred; else HMAC with key rotation and short TTL",
+    "retries": "Backoff base 200ms, factor 2.0, max 10s, jitter 20%",
+    "storage_limits": "Compaction target keeps < 7 days of ops and last acknowledged watermark"
+  },
+  "edge_cases_and_guarantees": {
+    "duplicate_ops": "Ignored by applied_ops primary key",
+    "reordered_delivery": "Safe; CRDTs are commutative; LWW uses (lamport,node)",
+    "clock_skew": "Harmless; Lamport merges causally on receipt",
+    "network_partitions": "Writes proceed independently; convergence on reconnection",
+    "schema_changes": "Use expand/contract; unknown fields in payloads are ignored"
+  },
+  "migration_path": [
+    "Add uuid to entities",
+    "Add CRDT metadata columns (field_ts, field_node, tombstone_ts/node)",
+    "Create infra tables (crdt_ops, applied_ops, peers, node_clock)",
+    "Implement CRDT apply functions and services",
+    "Wrap writes to emit ops",
+    "Deploy transport endpoints and background push",
+    "Run initial full-state bootstrap (emit ops for current state)",
+    "Enable continuous replication and monitor lag"
+  ],
+  "example_ops": {
+    "lww_set_name": {
+      "op_id": "01JV6R3X8F8ZK5M1E7QG2W9R3N",
+      "node_id": "01JV6QZX1A7B3C9D4EFGHIJKL0",
+      "entity_type": "User",
+      "entity_id": "b2f6f6c4-7b3c-4c5a-9c0a-1a2b3c4d5e6f",
+      "op_kind": "lww_set",
+      "payload": { "field": "name", "value": "Ada Lovelace" },
+      "lamport": 12873,
+      "occurred_at": "2026-03-07T08:59:41Z"
+    },
+    "orset_add_tag": {
+      "op_id": "01JV6R40K8J9P1S3T5U7V9WXYZ",
+      "node_id": "01JV6QZX1A7B3C9D4EFGHIJKL0",
+      "entity_type": "User",
+      "entity_id": "b2f6f6c4-7b3c-4c5a-9c0a-1a2b3c4d5e6f",
+      "op_kind": "orset_add",
+      "payload": {
+        "set": "tags",
+        "tag": "admin",
+        "tag_uid": "01JV6R40N3ADDUID"
+      },
+      "lamport": 12874,
+      "occurred_at": "2026-03-07T08:59:42Z"
+    },
+    "delete_user": {
+      "op_id": "01JV6R45KABCDEF1234567890",
+      "node_id": "01JV6QZX1A7B3C9D4EFGHIJKL0",
+      "entity_type": "User",
+      "entity_id": "b2f6f6c4-7b3c-4c5a-9c0a-1a2b3c4d5e6f",
+      "op_kind": "delete",
+      "payload": {},
+      "lamport": 12880,
+      "occurred_at": "2026-03-07T08:59:50Z"
+    }
+  },
+  "reliability_hardening": [
+    "Use database transactions to atomically: insert crdt_ops, apply state, insert applied_ops",
+    "Circuit breaker on per-peer failures to avoid thundering retries",
+    "Backpressure: if peer lag > threshold, reduce batch size and frequency",
+    "Dead-letter store with admin UI to inspect and replay",
+    "Periodic end-to-end checksum: hash of materialized state per entity to detect drift"
+  ],
+  "when_to_use_document_crdts": [
+    "If you have nested JSON, lists with positions, or collaborative text",
+    "Recommendation: Automerge (Rust/JS) via a small sidecar service; Rails stores snapshots and ops",
+    "Keep the same transport, idempotency, and watermarking"
+  ],
+  "non_goals": [
+    "Strong real-time transactional guarantees across nodes (use a replicated server DB for that)",
+    "Row-level referential integrity during out-of-order delivery; handle in apply logic or via post-apply validation"
+  ]
+}

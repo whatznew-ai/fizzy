@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Activate mise to get the correct Ruby version
+eval "$(/opt/homebrew/bin/mise activate bash)"
+
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$APP_ROOT"
+
+export RAILS_ENV=production
+export SECRET_KEY_BASE=fc87c110589601d91c68e54005f5be691bf058627d220e563c2c578a6452572aa8f350294e93b3bc5aa7c8a500e34696172315538ff1e76fa2b715881e647f5b
+export DISABLE_SSL=true
+export MULTI_TENANT=true
+export BASE_URL=http://localhost:3006
+export MAILER_FROM_ADDRESS="Fizzy <fizzy@localhost>"
+export SMTP_ADDRESS=127.0.0.1
+export SMTP_PORT=1025
+export SMTP_USERNAME=fizzy
+export SMTP_PASSWORD=fizzy
+
+exec bin/rails server -b :: -p 3006

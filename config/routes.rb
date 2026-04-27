@@ -1,6 +1,11 @@
 Rails.application.routes.draw do
   root "events#index"
 
+  namespace :replication do
+    resources :changes, only: [ :index, :create ]
+    resource :health, only: :show
+  end
+
   namespace :account do
     resource :cancellation, only: [ :create ]
     resource :entropy

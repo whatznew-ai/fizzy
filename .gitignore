@@ -36,6 +36,10 @@
 
 /public/assets
 
+# cr-sqlite extension binary (platform-specific, fetched by bin/fetch-crsqlite)
+/lib/crsqlite/*
+!/lib/crsqlite/.keep
+
 # Ignore master key for decrypting credentials and more.
 /config/master.key
 

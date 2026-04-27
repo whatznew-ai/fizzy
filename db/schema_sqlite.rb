@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.2].define(version: 2026_02_18_120000) do
+ActiveRecord::Schema[8.2].define(version: 2026_03_07_100001) do
   create_table "accesses", id: :uuid, force: :cascade do |t|
     t.datetime "accessed_at"
     t.uuid "account_id", null: false
@@ -439,6 +439,21 @@ ActiveRecord::Schema[8.2].define(version: 2026_02_18_120000) do
     t.index ["account_id"], name: "index_reactions_on_account_id"
     t.index ["reactable_type", "reactable_id"], name: "index_reactions_on_reactable_type_and_reactable_id"
     t.index ["reacter_id"], name: "index_reactions_on_reacter_id"
+  end
+
+  create_table "replication_peers", id: :uuid, force: :cascade do |t|
+    t.string "auth_token", limit: 255, null: false
+    t.string "base_url", limit: 255, null: false
+    t.integer "consecutive_failures", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "last_pulled_at"
+    t.datetime "last_pushed_at"
+    t.integer "last_sent_db_version", default: 0, null: false
+    t.string "name", limit: 255, null: false
+    t.string "state", limit: 255, default: "active", null: false
+    t.datetime "updated_at", null: false
+    t.index ["auth_token"], name: "index_replication_peers_on_auth_token", unique: true
+    t.index ["state"], name: "index_replication_peers_on_state"
   end
 
   create_table "search_queries", id: :uuid, force: :cascade do |t|

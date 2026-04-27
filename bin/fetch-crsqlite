@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+CRSQLITE_VERSION="${CRSQLITE_VERSION:-0.16.3}"
+DEST_DIR="$(cd "$(dirname "$0")/.." && pwd)/lib/crsqlite"
+
+detect_platform() {
+  local os arch
+
+  case "$(uname -s)" in
+    Darwin) os="darwin" ;;
+    Linux)  os="linux" ;;
+    *)      echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
+  esac
+
+  case "$(uname -m)" in
+    arm64|aarch64) arch="aarch64" ;;
+    x86_64)        arch="x86_64" ;;
+    *)             echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  echo "${os}-${arch}"
+}
+
+extension_suffix() {
+  case "$(uname -s)" in
+    Darwin) echo "dylib" ;;
+    Linux)  echo "so" ;;
+  esac
+}
+
+PLATFORM="$(detect_platform)"
+EXT="$(extension_suffix)"
+DEST_FILE="${DEST_DIR}/crsqlite.${EXT}"
+
+if [ -f "$DEST_FILE" ]; then
+  echo "cr-sqlite already present at ${DEST_FILE}"
+  exit 0
+fi
+
+DOWNLOAD_URL="https://github.com/vlcn-io/cr-sqlite/releases/download/v${CRSQLITE_VERSION}/crsqlite-${PLATFORM}.zip"
+TMP_ZIP="$(mktemp)"
+
+echo "Downloading cr-sqlite ${CRSQLITE_VERSION} for ${PLATFORM}..."
+mkdir -p "$DEST_DIR"
+
+if ! curl -fSL -o "$TMP_ZIP" "$DOWNLOAD_URL"; then
+  rm -f "$TMP_ZIP"
+  echo ""
+  echo "Could not download cr-sqlite automatically."
+  echo "Please download the ${PLATFORM} binary manually from:"
+  echo "  https://github.com/vlcn-io/cr-sqlite/releases/tag/v${CRSQLITE_VERSION}"
+  echo ""
+  echo "Place it at: ${DEST_FILE}"
+  exit 1
+fi
+
+unzip -o -j "$TMP_ZIP" -d "$DEST_DIR" "*.${EXT}" 2>/dev/null || \
+  unzip -o "$TMP_ZIP" -d "$DEST_DIR" 2>/dev/null
+
+rm -f "$TMP_ZIP"
+
+# Rename if the extracted file has a different name
+if [ ! -f "$DEST_FILE" ]; then
+  extracted=$(find "$DEST_DIR" -name "*.${EXT}" -type f | head -1)
+  if [ -n "$extracted" ]; then
+    mv "$extracted" "$DEST_FILE"
+  else
+    echo "Error: could not find .${EXT} file in downloaded archive"
+    exit 1
+  fi
+fi
+
+chmod +x "$DEST_FILE"
+echo "cr-sqlite installed at ${DEST_FILE}"
