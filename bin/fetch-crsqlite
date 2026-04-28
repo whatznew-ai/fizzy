@@ -29,6 +29,13 @@ extension_suffix() {
   esac
 }
 
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 127
+  fi
+}
+
 PLATFORM="$(detect_platform)"
 EXT="$(extension_suffix)"
 DEST_FILE="${DEST_DIR}/crsqlite.${EXT}"
@@ -37,6 +44,9 @@ if [ -f "$DEST_FILE" ]; then
   echo "cr-sqlite already present at ${DEST_FILE}"
   exit 0
 fi
+
+require_command curl
+require_command unzip
 
 DOWNLOAD_URL="https://github.com/vlcn-io/cr-sqlite/releases/download/v${CRSQLITE_VERSION}/crsqlite-${PLATFORM}.zip"
 TMP_ZIP="$(mktemp)"
