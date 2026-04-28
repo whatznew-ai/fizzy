@@ -71,6 +71,23 @@ sudo systemctl status fizzy
 sudo journalctl -u fizzy -f
 ```
 
+### Health check
+
+The systemd unit configures a Podman health check against Fizzy's unauthenticated Rails health endpoint:
+
+```sh
+curl --fail --silent --show-error --output /dev/null http://127.0.0.1/up
+```
+
+Podman runs this inside the container every 30 seconds, after a 60 second startup grace period. If the container becomes unhealthy, Podman restarts it.
+
+Check health status with:
+
+```sh
+sudo podman inspect --format '{{.State.Health.Status}}' fizzy
+sudo podman healthcheck run fizzy
+```
+
 ### Caddy
 
 Point Caddy at the local port:

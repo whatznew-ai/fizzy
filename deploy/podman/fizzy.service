@@ -7,7 +7,19 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/opt/fizzy
 ExecStartPre=-/usr/bin/podman rm -f fizzy
-ExecStart=/usr/bin/podman run --name fizzy --pull=never --env-file /opt/fizzy/.env --publish 127.0.0.1:3006:80 --volume /srv/fizzy/storage:/rails/storage:Z localhost/fizzy:local
+ExecStart=/usr/bin/podman run \
+  --name fizzy \
+  --pull=never \
+  --env-file /opt/fizzy/.env \
+  --publish 127.0.0.1:3006:80 \
+  --volume /srv/fizzy/storage:/rails/storage:Z \
+  --health-cmd "curl --fail --silent --show-error --output /dev/null http://127.0.0.1/up" \
+  --health-interval=30s \
+  --health-timeout=5s \
+  --health-retries=3 \
+  --health-start-period=60s \
+  --health-on-failure=restart \
+  localhost/fizzy:local
 ExecStop=/usr/bin/podman stop -t 30 fizzy
 ExecStopPost=-/usr/bin/podman rm -f fizzy
 Restart=always

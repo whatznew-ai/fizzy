@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Add Podman/systemd deployment templates that build this fork locally and read production settings from `/opt/fizzy/.env`.
+- Add a Podman health check for Fizzy's `/up` endpoint to the systemd deployment template.
 
 ### Fixed
 
