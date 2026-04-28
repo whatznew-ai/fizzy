@@ -1,0 +1,18 @@
+[Unit]
+Description=Fizzy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fizzy
+ExecStartPre=-/usr/bin/podman rm -f fizzy
+ExecStart=/usr/bin/podman run --name fizzy --pull=never --env-file /opt/fizzy/.env --publish 127.0.0.1:3006:80 --volume /srv/fizzy/storage:/rails/storage:Z localhost/fizzy:local
+ExecStop=/usr/bin/podman stop -t 30 fizzy
+ExecStopPost=-/usr/bin/podman rm -f fizzy
+Restart=always
+RestartSec=5
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
